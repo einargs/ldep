@@ -6,6 +6,6 @@ with pkgs;
 
 mkShell {
   buildInputs = [
-    fstar
+    fstar z3
   ];
 }
