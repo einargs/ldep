@@ -4,38 +4,86 @@ open FStar.OrdSet
 open FStar.String
 open FStar.Tactics
 
+(**
+Represents an identifier.
+
+If there's a conflict during the capture-avoiding
+substitution process, the `index` value is
+incremented.
+*)
 type name = {
   index : nat;
   str : string;
 }
 
+(**
+Introduce a new name.
+
+Initializes the name with `index` at `0`.
+*)
 val intro : string -> Tot name
 let intro s = {index=0;str=s}
 
+(**
+Increment the index of a name.
+*)
 val inc_name : name -> Tot name
 let inc_name n = { index = n.index+1; str = n.str }
 
+(**
+`type` is the core logic that type-checking occurs within.
+
+`binder` is a binder in the core logic.
+
+NOTE: the docs for both of these types are together like
+this because putting the binder docs where
+[this wiki page](https://github.com/FStarLang/FStar/wiki/Generating-documentation-with-fsdoc-comments)
+says to results in the F* subprocess for interactive
+typechecking exiting.
+
+TODO: ask about how to fix that.
+*)
 type ltt =
   | Var : var:name -> ltt
   | Universe : level:nat -> ltt
   | Abs : bnd:binder -> var:name -> body:ltt -> ltt
   | App : l:ltt -> r:ltt -> ltt
-and binder = 
+and binder =
   | Pi : ltt -> binder
   | Lam : binder
 
+(**
+A total ordering on names.
+*)
 val name_order : name -> name -> Tot bool
 let name_order n1 n2 =
   if n1.index = n1.index
     then 0 <= compare n1.str n2.str
     else n1.index > n2.index
 
-// I can't figure out how to prove this :(
+(*
+I can't figure out how to prove that string
+comparison is total, so I'm just making this
+an axiom.
+
+NOTE: if this is an `fsdoc` comment, it again
+seems to crash the F* subprocess for interactive
+typechecking.
+
+TODO: figure out how to fix that.
+*)
 assume NameOrderIsTotal: total_order name name_order
 
+(**
+A type alias for a set of names.
+
+Generally used when calculating free variables.
+*)
 type name_set = ordset name name_order
 
-val free_variables : ltt -> Tot name_set
+(** Calculate the free variables in an `ltt` term. *)
+val free_variables : t:ltt -> Tot name_set
+(** Calculate the free variables in a `ltt` binder. *)
 val binder_free_variables : binder -> Tot name_set
 let rec free_variables t =
   match t with
@@ -50,12 +98,30 @@ and binder_free_variables b =
   | Pi ty -> free_variables ty
   | Lam -> empty
 
+(**
+Predicate for checking if a name is free in a `ltt` term.
+*)
 val free_in : name -> ltt -> Tot bool
 let free_in v e = mem v (free_variables e)
 
+(**
+Predicate for checking if a `ltt` term is closed--i.e.
+the set of free variables is empty.
+*)
 val is_closed : ltt -> Tot bool
 let is_closed t = free_variables t = empty
 
+(**
+Calculate a name that does not occur within the set of
+names `s` by incrementing the `index` of `n` until it
+is not within `s`.
+
+This is probably more inefficient than it needs to be,
+because if `n` is in `s`, `find_non_capturing_name`
+removes `n` from `s` before recursing. This is done
+to show termination, but it's a quick hack that I
+should go back and fix if this project ever gets anywhere.
+*)
 val find_non_capturing_name : n:name -> s:name_set -> Tot name (decreases (size s))
 let rec find_non_capturing_name n s =
   if mem n s
@@ -63,8 +129,12 @@ let rec find_non_capturing_name n s =
          find_non_capturing_name (inc_name n) s'
     else n
 
+(** Size metric for `ltt` terms. *)
 val ltt_size : ltt -> Tot nat
+
+(** Size metric for `binder`s. *)
 val binder_size : binder -> Tot nat
+
 let rec ltt_size = function
   | Var _ | Universe _ -> 1
   | Abs bnd _ body ->
@@ -75,15 +145,41 @@ and binder_size = function
   | Pi ty -> 1 + ltt_size ty
   | Lam -> 1
 
-(** Replaces all occurances of `n2` with `n1` *)
-private val replace_var : n1:name -> n2:name -> t:ltt -> Tot (ret:ltt{ltt_size ret = ltt_size t})
-let rec replace_var n1 target t =
-  match t with
-  | Var v -> if v = target then Var n1 else t
-  | _ -> t
+(**
+Replaces all occurances of `replacee` with `substitute`.
 
-val subst : arg:ltt -> name -> bod:ltt -> Tot ltt (decreases %[ltt_size arg; ltt_size bod])
-val binder_subst : arg:ltt -> name -> bnd:binder -> Tot binder (decreases %[ltt_size arg; binder_size bnd])
+This is essentially a specialized version of `subst`;
+I created it bec
+*)
+private val replace_var : name -> name -> t:ltt -> Tot (ret:ltt{ltt_size ret = ltt_size t})
+let rec replace_var substitute replacee t =
+  let rep = replace_var substitute replacee in
+  match t with
+  | Var v -> if v = replacee then Var substitute else t
+  | Universe _ -> t
+  | Abs bnd v body ->
+    let bnd' = match bnd with
+      | Pi ty -> Pi (rep ty)
+      | Lam -> Lam in
+    Abs bnd' v (rep body)
+  | App l r -> App (rep l) (rep r)
+
+// This seems to be necessary for the `smt` solver to
+// have enough fuel to verify `subst`.
+#reset-options
+
+(**
+Perform capture-avoiding substitution of `arg` for `v` in  `bod`.
+*)
+val subst : arg:ltt -> v:name -> bod:ltt
+  -> Tot ltt (decreases %[ltt_size arg; ltt_size bod])
+
+(**
+Perform capture-avoiding substitution of `arg` for `v` in  `bnd`.
+*)
+val binder_subst : arg:ltt -> v:name -> bnd:binder
+  -> Tot binder (decreases %[ltt_size arg; binder_size bnd])
+
 let rec subst arg v t =
   match t with
   | Var v' -> if v' = v then arg else t
@@ -106,8 +202,12 @@ and binder_subst arg v b =
   | Pi ty -> Pi (subst arg v ty)
   | Lam -> Lam
 
+(** Check if two `ltt` terms are alpha equivalent. *)
 val alpha_eq : ltt -> ltt -> Tot bool
+
+(** Check if two `binder`s are alpha equivalent. *)
 val binder_alpha_eq : binder -> binder -> Tot bool
+
 let rec alpha_eq t1 t2 =
   match t1, t2 with
   | Abs b1 v1 e1, Abs b2 v2 e2 ->
@@ -121,6 +221,7 @@ and binder_alpha_eq b1 b2 =
   | Lam, Lam -> true
   | _ -> false
 
+(** Assorted assertions. *)
 let _ =
   let x = intro "x" in
   let y = intro "y" in
