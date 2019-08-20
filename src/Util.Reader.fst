@@ -7,11 +7,11 @@ private let reader (r:Type) (a:Type) = r -> M a
 private val to_reader : #r:Type -> #a:Type -> (r -> M a) -> reader r a
 let to_reader #r #a f = f
 
-(** Lift a value into the reader monad *)
+(** Lift a value into the reader monad. *)
 private val return_reader : r:Type -> a:Type -> a -> reader r a
 let return_reader r a x = fun env -> x
 
-(** Sequence a function in the reader monad *)
+(** Bind a function in the reader monad. *)
 private val bind_reader
   : r:Type -> a:Type -> b:Type
   -> x:reader r a -> f:(a -> reader r b) -> reader r b

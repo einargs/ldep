@@ -45,7 +45,7 @@ TODO: ask about how to fix that.
 *)
 type ltt =
   | Var : var:name -> ltt
-  | Universe : level:nat -> ltt
+  | Universe : ltt
   | Abs : bnd:binder -> var:name -> body:ltt -> ltt
   | App : l:ltt -> r:ltt -> ltt
 and binder =
@@ -88,7 +88,7 @@ val binder_free_variables : binder -> Tot name_set
 let rec free_variables t =
   match t with
   | Var var -> singleton var
-  | Universe _ -> empty
+  | Universe -> empty
   | Abs bnd var body ->
     let binder_fv = binder_free_variables bnd in
     union binder_fv (remove var (free_variables body))
@@ -136,7 +136,7 @@ val ltt_size : ltt -> Tot nat
 val binder_size : binder -> Tot nat
 
 let rec ltt_size = function
-  | Var _ | Universe _ -> 1
+  | Var _ | Universe -> 1
   | Abs bnd _ body ->
     let bnd_size = binder_size bnd in
     bnd_size + ltt_size body + 1
@@ -156,7 +156,7 @@ let rec replace_var substitute replacee t =
   let rep = replace_var substitute replacee in
   match t with
   | Var v -> if v = replacee then Var substitute else t
-  | Universe _ -> t
+  | Universe -> t
   | Abs bnd v body ->
     let bnd' = match bnd with
       | Pi ty -> Pi (rep ty)
@@ -183,7 +183,7 @@ val binder_subst : arg:ltt -> v:name -> bnd:binder
 let rec subst arg v t =
   match t with
   | Var v' -> if v' = v then arg else t
-  | Universe l -> Universe l
+  | Universe -> Universe
   | App l r -> App (subst arg v l) (subst arg v r)
   | Abs bnd bv body ->
     if bv = v
@@ -227,6 +227,6 @@ let _ =
   let y = intro "y" in
   let id = Abs Lam x (Var x) in
   let xy = Abs Lam x (Var y) in
-  assert (subst (Universe 0) y xy = Abs Lam x (Universe 0));
-  assert (subst (Universe 0) x id = id)
+  assert (subst (Universe) y xy = Abs Lam x (Universe));
+  assert (subst (Universe) x id = id)
   
