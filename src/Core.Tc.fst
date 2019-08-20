@@ -125,3 +125,45 @@ val lookup' : n:name -> Tc decl
 let lookup' n =
   let o = lookup n in
   unwrap_opt (MissingDeclFor n) o
+
+(** Execute a `TC` effect starting with the provided
+    environment.
+
+    This is basically just here to (A) provide a place
+    to stick some documentation related to how to run
+    the `TC` monad, and (B) to provide a convenient way
+    to provide a type hint to `reify (prgm ())` since
+    I seem to need to prove a type hint for that to
+    work right? (See the tests at the bottom of the file
+    for more info about that.)
+
+    TODO: figure out why `reify (pgrm ())` needs type
+    hints so I can maybe work around it.
+
+    >>> run_tc envr (reify (pgrm ()))
+    *)
+val run_tc : #a:Type -> envr:env -> f:(env -> tc_result a) -> Tot (ret:tc_result a{ret=f envr})
+let run_tc #a envr eff = eff envr
+
+(** Some tests. *)
+let _ =
+  let x = intro "x" in
+  let x_def = Function Universe Universe in
+  let envr = env_init [(x,x_def)] in
+
+  // This stops working if you remove the type annotation
+  // for `tcr` for some reason.
+  let _ =
+    let tcr: env -> Tot (tc_result (option decl)) = reify (lookup x) in
+    let target = Ok (Some x_def) in
+    assert (tcr envr = target) in
+
+  let _ =
+    let r = run_tc envr (reify (lookup x)) in
+    let target = Ok (Some x_def) in
+    assert (r = target) in
+
+  let _ =
+    let r = run_tc envr (reify (lookup' x)) in
+    assert (r = Ok x_def) in
+  ()
