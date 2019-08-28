@@ -1,6 +1,10 @@
 module Core.Tc
+
+open Core.Name
 open Core.Ltt
 open Core.Environment
+
+open Util.Result
 
 (** Representation of a type checking error. *)
 type tc_err =
@@ -11,15 +15,13 @@ type tc_err =
 
 (** The result of a type checking operation: either a
     success (`Ok`) or a failure (`Err`). *)
-type tc_result 'a =
-  | Err : tc_err -> tc_result 'a
-  | Ok : 'a -> tc_result 'a
+type tc_result (a:Type) = result tc_err a
 
 (** Internal representation of the tc monad. *)
 private let tc (a:Type) = env -> M (tc_result a)
 
 (** Lift a value `x` into the tc monad. *)
-private val return_tc : a:Type -> a -> Tot (tc a)
+private val return_tc : a:Type0 -> a -> Tot (tc a)
 let return_tc _ x = fun _ -> Ok x
 
 (** Bind a function in the tc monad. *)
@@ -50,8 +52,10 @@ total reifiable reflectable new_effect {
      ; raise  = tc_raise
 }
 
+private type tc_post (a:Type) = env -> tc_result a -> GTot Type0
+
 (** Pre- and post-condition form for the `TC` effect. *)
-effect Tc (a:Type) (pre:TC?.pre) (post:env -> tc_result a -> GTot Type0) =
+effect Tc (a:Type) (pre:TC?.pre) (post:tc_post a) =
   TC a
     (fun (envr:env) (p:TC?.post a) ->
       pre envr /\
@@ -59,7 +63,7 @@ effect Tc (a:Type) (pre:TC?.pre) (post:env -> tc_result a -> GTot Type0) =
 
 (** Utility effect for trivial conditions for the `TC` effect. *)
 effect TcNull (a:Type) =
-  TC a (fun (e0:env) (p:(a -> Type0)) -> forall (x:a). p x)
+  TC a (fun (e0:env) (p:(tc_result a -> Type0)) -> forall (x:tc_result a). p x)
 
 (** Get the typechecking environment. *)
 val get : unit -> TcNull env
@@ -68,21 +72,21 @@ let get = TC?.get
 (** Raise a typechecking error. *)
 val raise : (#a:Type) -> err:tc_err -> Tc a
   (requires fun _ -> True)
-  (ensures fun _ r -> r = Err err)
+  (ensures fun _ r -> r == Err err)
 let raise #a err = TC?.raise a err
 
 (** Specification of the behavior of `unwrap_opt`. *)
-private val unwrap_opt_spec : tc_err -> option 'a -> tc_result 'a -> Type0
-let unwrap_opt_spec err o r =
+private val unwrap_opt_spec : #a:Type -> tc_err -> option a -> tc_result a -> Type0
+let unwrap_opt_spec #a err o r =
   match r with
-  | Ok v -> o = Some v
-  | Err err' -> o = None /\ err' = err
+  | Ok v -> o == Some v
+  | Err err' -> o == None /\ err' == err
 
 (** Unwrap an `option`, and if it's `None` raise the passed error. *)
-val unwrap_opt : err:tc_err -> o:option 'a -> Tc 'a
+val unwrap_opt : #a:Type -> err:tc_err -> o:option a -> Tc a
   (requires fun _ -> True)
   (ensures fun _ r -> unwrap_opt_spec err o r)
-let unwrap_opt err o =
+let unwrap_opt #a err o =
   match o with
   | Some v -> v
   | None -> raise err
@@ -110,42 +114,51 @@ let lookup_def n =
   | Some (Function t _) -> Some t
   | _ -> None
 
+val lookup_lemma : envr:env -> n:name -> Lemma
+  (ensures
+    (let lookup_res = reify (lookup n) envr in
+    lookup_res = Ok (env_lookup envr n)
+    ))
+let lookup_lemma _ _ = ()
+
 (** Specification of the behavior of `lookup'`. *)
 val lookup'_spec : env -> name -> tc_result decl -> Type0
 let lookup'_spec envr n r =
+  let o = Ok?.value (reify (lookup n) envr) in
   match r with
-  | Ok v -> env_lookup envr n = Some v
-  | Err _ -> env_lookup envr n = None
+  | Ok v -> o = Some v
+  | Err _ -> o = None
 
 (** Unwrapped version of `lookup` that raises an error
     if `n` is not in the typechecking environment. *)
 val lookup' : n:name -> Tc decl
   (requires fun envr -> True)
-  (ensures fun e r -> lookup'_spec e n r)
+  (ensures fun e r -> True)
 let lookup' n =
-  let o = lookup n in
+  let o: option decl = lookup n in
   unwrap_opt (MissingDeclFor n) o
 
-(** Execute a `TC` effect starting with the provided
-    environment.
+(** Execute a `Tc` effect starting with the provided
+    environment. *)
+val run_tc :
+  #a:Type -> #pre:TC?.pre -> #post:tc_post a
+  -> envr:env -> f:(unit -> Tc a pre post)
+  -> Pure (tc_result a)
+    (requires pre envr)
+    (ensures fun r -> post envr r)
+let run_tc #a #pre #post envr eff =
+  let res = reify (eff ()) envr in
+  res
 
-    This is basically just here to (A) provide a place
-    to stick some documentation related to how to run
-    the `TC` monad, and (B) to provide a convenient way
-    to provide a type hint to `reify (prgm ())` since
-    I seem to need to prove a type hint for that to
-    work right? (See the tests at the bottom of the file
-    for more info about that.)
-
-    TODO: figure out why `reify (pgrm ())` needs type
-    hints so I can maybe work around it.
-
-    >>> run_tc envr (reify (pgrm ()))
-    *)
-val run_tc : #a:Type -> envr:env -> f:(env -> tc_result a) -> Tot (ret:tc_result a{ret=f envr})
-let run_tc #a envr eff = eff envr
+(** Execute a `TcNull` effect starting with the provided
+    environment. *)
+val run_tc_null : #a:Type -> envr:env -> f:(unit -> TcNull a) -> Tot (tc_result a)
+let run_tc_null #a envr eff =
+  let res = reify (eff ()) envr in
+  res
 
 (** Some tests. *)
+[@ "opaque_to_smt"]
 let _ =
   let x = intro "x" in
   let x_def = Function Universe Universe in
@@ -156,14 +169,14 @@ let _ =
   let _ =
     let tcr: env -> Tot (tc_result (option decl)) = reify (lookup x) in
     let target = Ok (Some x_def) in
-    assert (tcr envr = target) in
+    assert_norm (tcr envr == target) in
 
   let _ =
-    let r = run_tc envr (reify (lookup x)) in
+    let r = run_tc_null envr (fun () -> (lookup x)) in
     let target = Ok (Some x_def) in
-    assert (r = target) in
+    assert_norm (r = target) in
 
   let _ =
-    let r = run_tc envr (reify (lookup' x)) in
-    assert (r = Ok x_def) in
+    let r = reify (lookup' x) envr in
+    assert_norm (r = Ok x_def) in
   ()
