@@ -5,51 +5,66 @@ open Core.Ltt
 
 module M = FStar.OrdMap
 
-(**
-Represents a declaration.
-*)
-type decl =
-  | Function : term : ltt -> ty : ltt -> decl
+unopteq type local_env (tm:list local_name -> Type) : (vars:list local_name) -> Type =
+  | EmptyEnv : local_env tm []
+  | ConsEnv : #vars:list local_name
+            -> binder (tm vars)
+            -> name:local_name // the name bound by the binder
+            -> local_env tm vars
+            -> local_env tm (name :: vars)
+private val shave_vars : n:local_name
+                       -> l:list local_name{n `List.mem` l}
+                       -> Tot (list local_name)
+let rec shave_vars n (x::xs) =
+  if n = x then xs else shave_vars n xs
 
-(**
-The environment that typechecking occurs within.
+(*private val expand_term : #vars:list local_name
+                        -> #outer:list local_name
+                        -> raw_term vars
+                        -> Tot (raw_term (vars @ outer))
+let expand_term #vars #outer #tm = function
+  | RVar fc n -> RVar fc n
+  | RUniverse fc -> RUniverse fc
+  | RAbs fc var bnd body -> RAbs fc var bnd body
+  | RApp fc l r -> RApp fc l r
 
-`ordmap` doesn't work with the `READER` effect,
-so I have to use something else. As such, I'm
-just falling back on a list.
 
-NOTE: look at the [FStar.DM4F.StMap](https://github.com/FStarLang/FStar/blob/master/examples/dm4free/FStar.DM4F.StMap.fst)
-example--it uses `FStar.Map` in a STATE monad.
-*)
-abstract type env = name_map decl
+type expand_tm (tm:list local_name -> Type) =
+  vars:list local_name -> name:local_name ->
+  tm vars -> Tot (tm (name :: vars))
 
-(** Look up a declaration within the typechecking
-    environment. *)
-val env_lookup : env -> name -> Tot (option decl)
-let rec env_lookup e n = M.select n e
+private val expand_binder : #tm:(list local_name -> Type)
+                          -> #vars:list local_name
+                          -> name:local_name
+                          -> tm_helper:expand_tm tm
+                          -> binder (tm vars)
+                          -> Tot (binder (tm (name :: vars)))
+let expand_binder #tm #vars name tm_helper = map_binder (tm_helper vars name)*)
 
-(**
-`env_add` adds a declaration to an environment.
-*)
-val env_add : env -> name -> decl -> Tot env
-let env_add e n d = M.update n d e
+val env_lookup : #tm:(list local_name -> Type)
+               -> #vars:list local_name
+               -> name:local_name
+               -> local_env tm vars
+               -> Tot (
+               option (if name `List.mem` vars
+                       then (binder (tm (shave_vars name vars)))
+                       else False))
+let rec env_lookup #tm #vars name envr =
+  match envr with
+  | EmptyEnv -> None
+  | ConsEnv bnd n' rest ->
+    if n' = name then (
+      Some bnd
+    ) else (
+      env_lookup name rest
+    )
 
-(**
-`env_init` initializes an environment using a
-list of tuples pairing a name and a declaration.
-*)
-val env_init : list (name * decl) -> Tot env
-let env_init = List.Tot.fold_left
-  (fun envr (n,d) -> env_add envr n d) M.empty
+(*val env_lookup_lemma : #tm:(list local_name -> Type)
+                     -> #vars:list local_name
+                     -> name:local_name
+                     -> envr:local_env tm vars
+                     -> Lemma
+  (ensures (let res = env_lookup name envr in
+           Some? res ==> (name `List.mem` vars /\ res `has_type` binder (tm (shave_vars name vars)))))
+let env_lookup_lemma #tm #vars name envr = ()*)
 
-(**
-Predicate for checking if a name is in the environment.
-*)
-val env_has : env -> name -> Tot bool
-let rec env_has e n = M.contains n e
-
-val env_has_in : env -> name -> decl -> Type0
-let env_has_in e n d =
-  match env_lookup e n with
-  | Some v -> v = d
-  | None -> false

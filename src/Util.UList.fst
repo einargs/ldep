@@ -16,7 +16,7 @@ let rec is_ulist #a = function
   | [] -> True
   | x :: xs -> not (mem #a x xs) /\ is_ulist xs
 
-type ulist (a:eqtype) = l:list a{is_ulist l}
+private type ulist (a:eqtype) = l:list a{is_ulist l}
 type t = ulist
 
 private val smem_to_mem : #a:eqtype -> l:list a -> Lemma
