@@ -20,13 +20,12 @@ private val lookup_ty : #vars:list local_name
                       -> TcNull (raw_term vars)
 let lookup_ty #vars fc n ctx =
   let res = match n with
-  | LocalName ln ->
-    (match env_lookup ln ctx with
-    Some v -> v
-    None -> None)
-  | _ -> None in
+    | LocalName ln ->
+      binder_ty (env_lookup raw_term ln ctx)
+    | _ -> None in
   match res with
   | Some v -> v
   | None -> lookup' fc n
 
-val infer_type : body:raw_term -> env:local_scope -> TcNull (ty:raw_term)
+//val infer_type : body:raw_term -> env:local_scope -> TcNull (ty:raw_term)
+//let infer_type body env =

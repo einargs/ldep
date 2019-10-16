@@ -1,9 +1,13 @@
 # TODO
-1. Implement typecheck
-2. Write tests for typecheck & fix bugs from typecheck
-3. Write down what the type theory
-4. Consider the pros and cons of implementing beta reduction and beta equality
-5. Implement elaboration monad
-  a. Develop list of elaboration monad tactics
-  b. Implement skeleton of the elaboration monad
-  c. Implement elaboration monad tactics (add each tactic below)
+* Implement typecheck
+* Write down what the type theory is
+* Refactor the `total_ordering` stuff out of `Core.Name` and
+  into something like `Util.TotalOrdering`. Define a typeclass
+  that indicates that there is a total ordering on a type and
+  define variants of `ordmap` and `ordset` that just take a key
+  type (that has to have an instance of the typeclass) and a
+  value type.
+* Implement elaboration monad
+  1. Develop list of elaboration monad tactics
+  2. Implement skeleton of the elaboration monad
+  3. Implement elaboration monad tactics (add each tactic below)

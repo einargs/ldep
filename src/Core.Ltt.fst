@@ -4,6 +4,7 @@ open FStar.OrdSet
 open FStar.String
 module T = FStar.Tactics
 
+open Core.Weaken
 open Core.Fc
 open Core.Name
 
@@ -41,12 +42,37 @@ type binder (exp:Type) =
   | Let : value:exp -> ty:exp -> binder exp
   | Pi : ty:exp -> binder exp
 
+(** Get the type that a binder binds a variable to be. *)
+val binder_ty : binder 'a -> Tot 'a
+let binder_ty = function
+  | Lam ty -> ty
+  | Let _ ty -> ty
+  | Pi ty -> ty
+
 (** Map over the expressions in a binder. *)
 val map_binder : ('a -> Tot 'b) -> binder 'a -> Tot (binder 'b)
 let map_binder f = function
   | Lam ty -> Lam (f ty)
   | Let v ty -> Let (f v) (f ty)
   | Pi ty -> Pi (f ty)
+
+(** Implementation of `weaken_ns` for `binder`. *)
+private let binder_weaken_ns'
+  (tm:list local_name -> Type)
+  [|weaken tm|]
+  (vars:list local_name)
+  (ns:list local_name)
+  (t:binder (tm vars))
+  : binder (tm (ns @ vars))
+  = map_binder (weaken_ns tm ns) t
+
+unfold type binder_tm (tm:list local_name -> Type) =
+  fun vars -> binder (tm vars)
+
+(** Implementation of `weaken` for `binder`. *)
+instance weaken_binder (_:weaken 'tm): weaken (binder_tm 'tm) = {
+  weaken_ns' = (binder_weaken_ns' 'tm)
+}
 
 (** The core representation that is used for type checking. *)
 type term (vars:list local_name) =
@@ -198,14 +224,17 @@ let rec thin #outer #inner ns t =
     Abs fc var bnd' body'
   | App fc l r -> App fc (thin ns l) (thin ns r)
 
-(** Add a single variable to the scope of the term.
 
-    A surprisingly useful utility function. *)
-private val weaken_term : #vars:list local_name
-                        -> ns:list local_name
-                        -> term vars
-                        -> Tot (term (ns @ vars))
-let weaken_term #vars ns t = thin #[] #vars ns t
+(** Implementation of `weaken_ns'` for `term`. *)
+private val weaken_term_ns' : vars:list local_name
+                            -> ns:list local_name
+                            -> term vars
+                            -> Tot (term (ns @ vars))
+let weaken_term_ns' vars = thin #[] #vars
+
+(** Implementation of `weaken` for `term`. *)
+instance weaken_term : weaken term =
+  Mkweaken weaken_term_ns'
 
 (** Lemma for renaming variable indices. *)
 private val rename_var_index_lemma : #xs:list local_name
@@ -295,7 +324,7 @@ let try_to_drop #outer #vars #drop #name fc idx env =
   ) else if idx < stop then (
     let tm_index = idx - start in
     let tm = element_at env tm_index in
-    (weaken_term outer tm) <: term new_vars
+    (weaken_ns term outer tm) <: term new_vars
 
   // If `idx` is in `vars`
   ) else (
