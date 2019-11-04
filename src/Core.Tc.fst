@@ -10,8 +10,10 @@ open Util.Result
 
 (** Representation of a type checking error. *)
 type tc_err =
-  | TcMissingDefFor : fc -> any_name -> tc_err
-  | TcCannotEquate : fc -> closed_raw_term -> closed_raw_term -> tc_err
+  | TcMissingDefFor : fc -> global_name -> tc_err
+  | TcCannotEquate : fc -> #vars:list local_name -> term vars -> term vars -> tc_err
+  | TcTermIsNotAType : fc -> #vars:list local_name -> term vars -> tc_err
+  | TcExpectedTermToHaveType : fc -> #vars:list local_name -> term vars -> tc_err
   | TcErrMsg : fc -> string -> tc_err
 
 (** The result of a type checking operation: either a
@@ -50,7 +52,7 @@ private val tc_get : unit -> Tot (tc tc_env)
 let tc_get (): tc tc_env = fun envr -> Ok envr
 
 (** Definition of the `TC` effect. *)
-total reifiable reflectable new_effect {
+reifiable reflectable new_effect {
   TC : a:Type -> Effect
   with repr   = tc
      ; bind   = bind_tc
@@ -109,36 +111,40 @@ let require err b =
   if b then () else raise err
 
 (** Lookup a declaration in the typechecking environment. *)
-val lookup : any_name -> TcNull (option global_def)
+val lookup : global_name -> TcNull (option global_def)
 let lookup n =
   let e = get () in
   lookup_gdef n e
 
 (** Lookup the value associated with a name in the typechecking
     environment. *)
-val lookup_value : any_name -> TcNull (option closed_term)
+val lookup_value : global_name -> TcNull (option closed_term)
 let lookup_value n =
-  Option.mapTot (term_for_gdef) (lookup n)
+  Option.mapTot (body_of_gdef) (lookup n)
+
+(* made invalid by removing `total`
 
 val lookup_lemma : envr:tc_env -> n:any_name -> Lemma
   (ensures (let lookup_res = reify (lookup n) envr in
            lookup_res = Ok (lookup_gdef n envr)
            ))
-let lookup_lemma _ _ = ()
+let lookup_lemma _ _ = () *)
 
+
+(* made invalid by removing `total`
 (** Specification of the behavior of `lookup'`. *)
 private val lookup'_spec : tc_env -> any_name -> tc_result global_def -> Type0
 let lookup'_spec envr n r =
   let o = Ok?.value (reify (lookup n) envr) in
   match r with
   | Ok v -> o = Some v
-  | Err _ -> o = None
+  | Err _ -> o = None*)
 
 (** Unwrapped version of `lookup` that raises an error
     if `n` is not in the typechecking environment.
 
     Takes a file location to include in the error. *)
-val lookup' : fc -> n:any_name -> Tc global_def
+val lookup' : fc -> n:global_name -> Tc global_def
   (requires fun envr -> True)
   (ensures fun e r -> True)
 let lookup' fc n =
@@ -150,7 +156,7 @@ let lookup' fc n =
 val run_tc :
   #a:Type -> #pre:TC?.pre -> #post:tc_post a
   -> envr:context -> f:(unit -> Tc a pre post)
-  -> Pure (result tc_err a)
+  -> Div (result tc_err a)
     (requires pre envr)
     (ensures fun r -> post envr r)
 let run_tc #a #pre #post envr eff =
@@ -161,7 +167,7 @@ let run_tc #a #pre #post envr eff =
     environment. *)
 val run_tc_null : #a:Type -> envr:context
                 -> f:(unit -> TcNull a)
-                -> Tot (result tc_err a)
+                -> Dv (result tc_err a)
 let run_tc_null #a envr eff =
   let res = reify (eff ()) envr in
   res

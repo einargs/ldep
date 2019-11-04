@@ -12,6 +12,7 @@ let weaken_ns
   [|d:weaken tm|]
   (ns:list local_name)
   (t:tm vars)
+  : tm (ns @ vars)
   = weaken_ns' #tm vars ns t
 
 let weaken'

@@ -24,16 +24,28 @@ let rec element_at l idx =
 private val name_of : l:list local_name -> idx:nat{idx `valid_index_in` l} -> Tot local_name
 let rec name_of l idx = element_at l idx
 
-val is_bound_var : local_name -> nat -> list local_name -> Tot Type0
-let is_bound_var n idx ns = idx `valid_index_in` ns /\ n = name_of ns idx
+val is_bound_var_index : local_name -> nat -> list local_name -> Tot Type0
+let is_bound_var_index n idx ns = idx `valid_index_in` ns /\ n = name_of ns idx
 
 type var_index (n:local_name) (vars:list local_name) =
-  idx:nat{is_bound_var n idx vars}
+  idx:nat{is_bound_var_index n idx vars}
 
 type bound_var (vars:list local_name) =
   | BoundVar : #bound_name:local_name
              -> index:var_index bound_name vars
              -> bound_var vars
+
+val remove_bound_var : vars:list local_name
+                     -> bv:bound_var vars
+                     -> Tot (list local_name)
+let remove_bound_var vars bv =
+  let rec remove_index l (i:nat) =
+    match l, i with
+    | x::xs, 0 -> xs
+    | x::xs, _ -> x::(remove_index xs (i-1))
+    | [], _ -> [] in
+  match bv with
+  | BoundVar idx -> remove_index vars idx
 
 (** Binders are parameterized by the term representation to
     make them easier to re-use for other representations. *)
@@ -161,7 +173,7 @@ private val weaken_var_lemma : ns:list local_name
                              -> Lemma
   (ensures forall inner existing (idx:var_index existing inner).
     let bump = List.length ns in
-    is_bound_var existing (idx+bump) (ns@inner))
+    is_bound_var_index existing (idx+bump) (ns@inner))
 let rec weaken_var_lemma ns =
   // We prove the lemma by performing induction over the structure
   // of `ns`.
@@ -240,10 +252,10 @@ instance weaken_term : weaken term =
 private val rename_var_index_lemma : #xs:list local_name
                                    -> #ys:list local_name
                                    -> #cur_name:local_name
-                                   -> idx:nat{is_bound_var cur_name idx xs}
+                                   -> idx:nat{is_bound_var_index cur_name idx xs}
                                    -> Lemma
   (requires idx `valid_index_in` ys)
-  (ensures is_bound_var (name_of ys idx) idx ys) (decreases %[xs; ys])
+  (ensures is_bound_var_index (name_of ys idx) idx ys) (decreases %[xs; ys])
 let rec rename_var_index_lemma #xs #ys #cur_name idx =
   match xs, ys, idx with
   | x :: xs', _, 0 -> assert (x = cur_name)
@@ -258,9 +270,9 @@ private val sub_index_lemma : #outer:list local_name
                             -> #name:local_name
                             -> idx:nat
                             -> Lemma
-  (requires (is_bound_var name idx (outer @ inner))
+  (requires (is_bound_var_index name idx (outer @ inner))
             /\ (idx `valid_index_in` outer))
-  (ensures (is_bound_var name idx outer))
+  (ensures (is_bound_var_index name idx outer))
   (decreases %[outer])
 let rec sub_index_lemma #outer #inner #name idx =
   if idx = 0 then () else
@@ -273,8 +285,8 @@ private val super_index_lemma : #outer:list local_name
                               -> #name:local_name
                               -> idx:nat
                               -> Lemma
-  (requires (is_bound_var name idx outer))
-  (ensures (is_bound_var name idx (outer @ inner)))
+  (requires (is_bound_var_index name idx outer))
+  (ensures (is_bound_var_index name idx (outer @ inner)))
   (decreases outer)
 let rec super_index_lemma #outer #inner #name idx =
   if idx = 0 then () else
@@ -288,7 +300,7 @@ private val strip_index_lemma : outer:list local_name
                               -> idx:var_index name (outer @ inner)
                               -> Lemma
   (requires idx >= List.length outer)
-  (ensures is_bound_var name (idx - List.length outer) inner)
+  (ensures is_bound_var_index name (idx - List.length outer) inner)
   (decreases outer)
 let rec strip_index_lemma outer inner name idx =
   match outer with
@@ -297,12 +309,14 @@ let rec strip_index_lemma outer inner name idx =
     let idx' = idx-1 in
     strip_index_lemma xs inner name idx'
 
+(** Remove the variables in `drop` by replacing them with the corresponding
+    terms in `env`. *)
 private val try_to_drop : #outer:list local_name
                         -> #vars:list local_name
                         -> #drop:list local_name
                         -> #name:local_name
                         -> fc -> idx:var_index name (outer @ drop @ vars)
-                        -> subst_env vars drop
+                        -> env:subst_env vars drop
                         -> Tot (term (outer @ vars))
 let try_to_drop #outer #vars #drop #name fc idx env =
   let start = List.length outer in
@@ -336,22 +350,45 @@ let try_to_drop #outer #vars #drop #name fc idx env =
     (Local fc (BoundVar new_idx)) <: term new_vars
   )
 
-private val subst : #outer:list local_name
-                  -> #vars:list local_name
-                  -> #drop:list local_name
-                  -> subst_env vars drop
-                  -> t:term (outer @ drop @ vars)
-                  -> Tot (term (outer @ vars)) (decreases t)
-let rec subst #outer #vars #drop env = function
+(** Perform the substitutions encoded in `env`. *)
+val subst_by_env : #outer:list local_name
+                 -> #vars:list local_name
+                 -> #drop:list local_name
+                 -> env:subst_env vars drop
+                 -> t:term (outer @ drop @ vars)
+                 -> Tot (term (outer @ vars)) (decreases t)
+let rec subst_by_env #outer #vars #drop env = function
   | Local fc (BoundVar idx) -> try_to_drop fc idx env
   | Ref fc gn -> Ref fc gn
   | Universe fc -> Universe fc
   | Abs fc var bnd body ->
     let outer' = var :: outer in
     let bnd' = match bnd with
-      | Pi ty -> Pi (subst env ty)
-      | Let v ty -> Let (subst env v) (subst env ty)
-      | Lam ty -> Lam (subst env ty) in
-    let body' = subst #outer' env body in
+      | Pi ty -> Pi (subst_by_env env ty)
+      | Let v ty -> Let (subst_by_env env v) (subst_by_env env ty)
+      | Lam ty -> Lam (subst_by_env env ty) in
+    let body' = subst_by_env #outer' env body in
     Abs fc var bnd' body'
-  | App fc l r -> App fc (subst env l) (subst env r)
+  | App fc l r -> App fc (subst_by_env env l) (subst_by_env env r)
+
+(** Performs t[x/t'], or substitution of `t'` for `x` in `t`. *)
+val subst : #outer:list local_name
+          -> #vars:list local_name
+          -> x:local_name
+          -> t':term vars
+          -> t:term (outer @ (x :: vars))
+          -> Tot (term (outer @ vars)) (decreases t)
+let subst #outer #vars x t' t =
+    let drop = [x] in
+    let env: subst_env vars drop = [t'] in
+    subst_by_env #outer #vars #drop env t
+(*val subst : #outer:list local_name
+          -> #vars:list local_name
+          -> x:local_name
+          -> t':term vars
+          -> t:term (outer @ (x :: vars))
+          -> Tot (term (outer @ vars)) (decreases t)
+let subst #outer #vars x t' t =
+    let drop = [x] in
+    let env: subst_env vars drop = [t'] in
+    subst_by_env #outer #vars #drop env t*)

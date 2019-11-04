@@ -10,7 +10,7 @@ open Core.Ltt
     Future cases are things like type constructors and
     data constructors. *)
 type def =
-  | Function : body:closed_term -> def
+  | Function : ty:closed_term -> body:closed_term -> def
 
 (** Contains extra context *)
 type global_def = {
@@ -33,22 +33,68 @@ let mk_gdef name ty d = {
   definition = d;
 }
 
-val term_for_gdef : global_def -> Tot closed_term
-let term_for_gdef gdef =
+val body_of_gdef : global_def -> Tot closed_term
+let body_of_gdef gdef =
   match gdef.definition with
-  | Function body -> body
+  | Function _ body -> body
+
+(** Utility function that lifts a predicate over an option type,
+    defaulting to `True` if it's `None`. *)
+private val pred_over_option : ('a -> Type0)
+                     -> option 'a
+                     -> Type0
+let pred_over_option p = function
+  | Some v -> p v
+  | None -> True
+
+abstract type definitions_map =
+  map:global_name_map global_def{forall n.
+    match OrdMap.select n map with
+    | Some def -> n = def.qualified_name
+    | None -> True
+  }
+
+(** An empty `definitions_map`. *)
+let empty_definitions_map
+  : definitions_map
+  = OrdMap.empty
+
+(** Insert a definition into a `definitions_map`. *)
+let insert_definition
+  (def:global_def)
+  (map:definitions_map)
+  : Tot definitions_map
+  = OrdMap.update def.qualified_name def map
+
+(** Lookup a definition in a `definitions_map`
+    based on its qualified name. *)
+let get_definition
+  (name:global_name)
+  (map:definitions_map)
+  : Tot (res:option global_def{
+    pred_over_option
+      (fun def -> def.qualified_name = name)
+      res
+  })
+  = OrdMap.select name map
 
 unopteq type context = {
-  content: any_name_map global_def;
+  definitions: definitions_map
 }
 
-(** Initialize a context based on a list of names and definitions. *)
-val init_context : list (any_name * global_def)
-                 -> context
+(** Initialize a context based on a list of definitions. *)
+val init_context : list global_def
+                 -> Tot context
 let init_context l =
-  let f c (n, d) = OrdMap.update n d c in
-  let content = List.Tot.fold_left f OrdMap.empty l in
-  { content = content }
+  let f map def = insert_definition def map in
+  let definitions = List.Tot.fold_left f empty_definitions_map l in
+  { definitions = definitions }
 
-val lookup_gdef : any_name -> context -> Tot (option global_def)
-let lookup_gdef name ctxt = OrdMap.select name ctxt.content
+(** Lookup a definition based on its qualified name. *)
+val lookup_gdef : name:global_name
+                -> context
+                -> Pure (option global_def)
+  (requires True)
+  (ensures (pred_over_option
+    (fun def -> def.qualified_name == name)))
+let lookup_gdef name ctxt = get_definition name ctxt.definitions

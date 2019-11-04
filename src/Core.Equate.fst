@@ -1,7 +1,49 @@
-module Core.Evaluate
+module Core.Equate
 
 open Core.Ltt
+open Core.Name
 open Core.Tc
+open Core.Context
+open Core.Weaken
+
+(** Put a term into weak head normal form.
+    
+    Based on version3 of `pi-forall`. *)
+val whnf : #vars:list local_name
+         -> term vars
+         -> TcNull (term vars)
+let rec whnf #vars t =
+  match t with
+  | Ref fc gn ->
+    List.Tot.append_l_nil vars;
+    weaken_ns term vars
+      (body_of_gdef (lookup' fc gn))
+  | App _ l r ->
+    (match l with
+    | Abs _ v (Lam _) body ->
+      assert (body `has_type` term vars);
+      let outer = [] in
+      let inner = vars in
+      whnf (subst #outer #inner v r body)
+    | _ -> t)
+  | _ -> t
+
+(** Assert that a value is a function type. *)
+val ensurePi : #vars:list local_name
+             -> t:term vars
+             -> Tc unit
+  (requires fun _ -> True)
+  (ensures fun envr -> function
+    | Ok () -> (match t with
+      | Abs _ (Pi _) _ _ -> True
+      | _ -> False)
+    | _ -> True)
+
+let ensurePi t =
+  let t' = whnf t in
+  match t' with
+  | Abs (Pi ty) var body -> ty * var * body
+  | _ -> raise (ExpectedFunctionType t)
 
 (** Notion of equality based on version3 of `pi-forall`.
     
@@ -14,11 +56,14 @@ open Core.Tc
     that I don't have a solid understanding of what
     type theory I'm working under, which could introduce
     subtle bugs. *)
-val equate : ltt -> ltt -> Tc unit
+val equate : #vars:list local_name
+           -> term vars
+           -> term vars
+           -> TcNull unit
 let equate t1 t2 =
   // if two terms have alpha equality they're
   // equal.
-  if alpha_eq t1 t2 then () else 
+  if alpha_eq t1 t2 then () else
     let t1' = whnf t1 in
     let t2' = whnf t2 in
     let not_equal = CannotEquate t1' t2' in
@@ -65,27 +110,3 @@ let equate t1 t2 =
     // not equal.
     | _ -> raise not_equal
 
-(** Assert that a value is a function type. *)
-val ensurePi : ltt -> Tc (ty: ltt * var: name * body: ltt)
-let ensurePi t =
-  let t' = whnf t in
-  match t' with
-  | Abs (Pi ty) var body -> ty * var * body
-  | _ -> raise (ExpectedFunctionType t)
-
-(** Put a term into weak head normal form.
-    
-    Based on version3 of `pi-forall`. *)
-val whnf : ltt -> Tc ltt
-let rec whnf t =
-  match t with
-  | Var n ->
-    match lookup_def n with
-    | Some v -> v
-    | None -> t
-  | App l r ->
-    match l with
-    | Abs Lam v body ->
-      whnf (subst r v body)
-    | _ -> t
-  | _ -> t

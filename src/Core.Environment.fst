@@ -14,26 +14,42 @@ unopteq type local_env (tm:list local_name -> Type) : (vars:list local_name) -> 
             -> local_env tm vars
             -> local_env tm (name :: vars)
 
-let rec env_lookup
+private let rec descend
+  (#vars:list local_name)
+  (#name:local_name)
+  (tm:list local_name -> Type)
+  [|weaken tm|]
+  (idx:var_index name vars)
+  (envr:local_env tm vars)
+  : Tot (binder (tm vars))
+  = assert (ConsEnv? envr);
+    match envr with
+    | ConsEnv bnd name' rest ->
+      let bnd_vars = List.Tot.tl vars in
+      let bnd': binder (tm bnd_vars) =
+        if idx = 0 then (
+          assert (name = name');
+          bnd
+        ) else (
+          descend #bnd_vars #name tm (idx-1) rest
+        ) in
+      weaken' #bnd_vars #name' (binder_tm tm) bnd'
+
+let local_env_lookup_binder
   (#vars:list local_name)
   (tm:list local_name -> Type)
   [|weaken tm|]
-  (name:local_name)
+  (bv:bound_var vars)
   (envr:local_env tm vars)
-  : option (binder (tm vars))
-  = match envr with
-  | EmptyEnv -> None
-  | ConsEnv bnd n' rest ->
-    let opt_bnd = if n' = name
-      then Some bnd
-      else env_lookup tm name rest in
-    let v :: vs = vars in
-    assert (opt_bnd `has_type` option (binder (tm vs)));
-    let map_bnd (bnd:binder (tm vs))
-      : binder (tm vars) =
-      let bnd' = weaken' #vs #v (binder_tm tm) bnd in
-      assert (bnd' `has_type` binder (tm vars));
-      bnd' in
-    match opt_bnd with
-    | Some b -> Some (map_bnd b)
-    | None -> None
+  : Tot (binder (tm vars))
+  = match bv with
+  | BoundVar idx -> descend tm idx envr
+
+let local_env_lookup_ty
+  (#vars:list local_name)
+  (tm:list local_name -> Type)
+  [|weaken tm|]
+  (bv:bound_var vars)
+  (envr:local_env tm vars)
+  : Tot (tm vars)
+  = binder_ty (local_env_lookup_binder tm bv envr)
